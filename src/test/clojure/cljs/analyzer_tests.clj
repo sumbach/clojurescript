@@ -3,7 +3,10 @@
             [cljs.analyzer :as a]
             [cljs.env :as e]
             [cljs.env :as env]
-            [cljs.analyzer.api :as ana-api])
+            [cljs.analyzer.api :as ana-api]
+            [cljs.compiler :as comp]
+            [cljs.tagged-literals :as tags]
+            [clojure.pprint :refer [pprint]])
   (:use clojure.test))
 
 ;;******************************************************************************
@@ -16,20 +19,80 @@
                   (x 1 2 3 4))
    :keyword-arity '(do (:argumentless-keyword-invocation))})
 
-(defn warn-count [form]
+(defn warn-count* [f forms]
   (let [counter (atom 0)
         tracker (fn [warning-type env & [extra]]
                   (when (warning-type a/*cljs-warnings*)
+                    (let [err (a/error-message warning-type extra)
+                          msg (a/message env (str "WARNING: " err))]
+                      (binding [*out* *err*] (println msg)))
                     (swap! counter inc)))]
     (a/with-warning-handlers [tracker]
-      (a/analyze (a/empty-env) form))
+      (doseq [form forms] (f form)))
     @counter))
+
+(defn warn-count [form]
+  (warn-count* #(a/analyze (a/empty-env) %) [form]))
+
+(defn warn-count-forms [forms]
+  (let [env (env/default-compiler-env)
+        f (fn [form]
+            #_(pprint form)
+            (let [env-before @env
+                  ast (a/analyze @env form)
+                  env-after @env
+                  printer (fn [x] (-> x
+                                      (dissoc :js-dependency-index)
+                                      (update-in [::a/namespaces] #(map (fn [[k v]] [k (count v)]) %))
+                                      (update-in [::a/constant-table] count)
+                                      (update-in [:ns] :name)
+                                      pprint))
+                  new-env (-> (:env ast)
+                              (update-in [::a/namespaces] merge (::a/namespaces env-after))
+                              (assoc ::a/constant-table (::a/constant-table env-after))
+                              (assoc :ns (a/get-namespace a/*cljs-ns*)))]
+              (def ebefore env-before)
+              (def eafter env-after)
+              (def myast ast)
+              (def east (:env ast))
+              (def enew new-env)
+              #_(printer env-before)
+              #_(printer env-after)
+              #_(printer (:env ast))
+              #_(printer new-env)
+              (with-out-str (comp/emit (assoc ast :env new-env)))
+              (reset! env new-env)))]
+    (binding [env/*compiler* env
+              a/*cljs-ns* 'cljs.user
+              a/*cljs-static-fns* true]
+      (warn-count* f forms))))
 
 (deftest no-warn
   (is (every? zero? (map (fn [[name form]] (a/no-warn (warn-count form))) warning-forms))))
 
 (deftest all-warn
   (is (every? #(= 1 %) (map (fn [[name form]] (a/all-warn (warn-count form))) warning-forms))))
+
+(def core-tags-and-example-values
+  {nil [nil 'js/undefined]
+   'number [0]
+   'string [""]
+   'boolean [true false]
+   'function ['identity '(fn [x] x)]
+   'object [(tags/->JSValue {})]
+   'array [(tags/->JSValue [])]})
+
+(def implement-protocol-on-core-tags-forms
+  (for [[tag examples] core-tags-and-example-values]
+    (concat
+     (list '(ns cljs.user (:require cljs.core) (:require-macros cljs.core))
+           '(defprotocol Foo (foo [x]))
+           (list 'extend-type tag 'Foo '(foo [x] x)))
+     (for [example examples]
+       (list 'foo example)))))
+
+(deftest no-warn-on-implement-protocol-on-core-tag
+  (is (every? zero? (map (fn [forms] (warn-count-forms forms)) implement-protocol-on-core-tags-forms))))
 
 ;; =============================================================================
 ;; NS parsing
