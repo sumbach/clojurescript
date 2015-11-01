@@ -1344,7 +1344,7 @@
                       :name name-var
                       :methods methods
                       :variadic variadic
-                      :tag 'function
+                      :tag (with-meta 'function {::no-resolve true})
                       :recur-frames *recur-frames*
                       :loop-lets *loop-lets*
                       :jsdoc [js-doc]
@@ -2470,7 +2470,9 @@
      :form form
      :items items
      :children items
-     :tag (if (map? val) 'object 'array)}))
+     :tag (if (map? val)
+            (with-meta 'object {::no-resolve true})
+            (with-meta 'array {::no-resolve true}))}))
 
 (defn elide-reader-meta [m]
   (dissoc m :file :line :column :end-column :end-line :source))
@@ -2543,11 +2545,11 @@
        (= () form) (analyze-list env form)
        :else
        (let [tag (cond
-                   (nil? form) 'clj-nil
-                   (number? form) 'number
-                   (string? form) 'string
-                   (true? form) 'boolean
-                   (false? form) 'boolean)]
+                   (nil? form) (with-meta 'clj-nil {::no-resolve true})
+                   (number? form) (with-meta 'number {::no-resolve true})
+                   (string? form) (with-meta 'string {::no-resolve true})
+                   (true? form) (with-meta 'boolean {::no-resolve true})
+                   (false? form) (with-meta 'boolean {::no-resolve true}))]
          (cond-> {:op :constant :env env :form form}
            tag (assoc :tag tag))))))
 
